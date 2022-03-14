@@ -69,6 +69,7 @@ class SOM:
         self.epochs = 0
         self.sig_init = sig_init
         self.alpha_init = alpha_init
+        print(self.sig_init, self.alpha_init)
 
         # Andrew - props for tracking
         self.map20 = 0
@@ -88,7 +89,7 @@ class SOM:
 
     # Andrew - get map for img
     def get_map(self):
-        return self.weights, self._locations
+        return self.weights.copy(), self._locations.copy()
 
     def _get_locations(self, m, n):
         """
