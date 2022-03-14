@@ -4,16 +4,32 @@ similar to clustering method in sklearn.
 
 @author: Riley Smith
 Created: 1-27-21
+
+Forked on 2022-03-14 (https://github.com/andrewdaly124/sklearn-som)
+Why? Adjustments for Neighborhood and Learning Rate
 """
 
 import numpy as np
 
-class SOM():
+
+class SOM:
     """
     The 2-D, rectangular grid self-organizing map class using Numpy.
     """
-    def __init__(self, m=3, n=3, dim=3, lr=1, sigma=1, max_iter=3000,
-                    random_state=None):
+
+    def __init__(
+        self,
+        m=3,
+        n=3,
+        dim=3,
+        lr=1,
+        sigma=1,
+        max_iter=3000,
+        random_state=None,
+        # Andrew - new props
+        sig_init=1,
+        alpha_init=0.8,
+    ):
         """
         Parameters
         ----------
@@ -48,16 +64,31 @@ class SOM():
         self.sigma = sigma
         self.max_iter = max_iter
 
+        # Andrew - props for dynamics
+        self.k = 0
+        self.epochs = 0
+        self.sig_init = sig_init
+        self.alpha_init = alpha_init
+
+        # Andrew - props for tracking
+        self.map20 = 0
+        self.map40 = 0
+        self.map100 = 0
+
         # Initialize weights
         self.random_state = random_state
         rng = np.random.default_rng(random_state)
-        self.weights = rng.normal(size=(m * n, dim))
+        self.weights = rng.random(size=(m * n, dim))
         self._locations = self._get_locations(m, n)
 
         # Set after fitting
         self._inertia = None
         self._n_iter_ = None
         self._trained = False
+
+    # Andrew - get map for img
+    def get_map(self):
+        return self.weights, self._locations
 
     def _get_locations(self, m, n):
         """
@@ -70,35 +101,50 @@ class SOM():
         Find the index of the best matching unit for the input vector x.
         """
         # Stack x to have one row per weight
-        x_stack = np.stack([x]*(self.m*self.n), axis=0)
+        x_stack = np.stack([x] * (self.m * self.n), axis=0)
         # Calculate distance between x and each weight
         distance = np.linalg.norm(x_stack - self.weights, axis=1)
         # Find index of best matching unit
         return np.argmin(distance)
+
+    # Andrew - get dynamic sigma
+    def _get_sigma(self):
+        return self.sig_init * np.exp(-self.k / self.epochs)
+
+    # Andrew - get dynamic learning rate
+    def _get_lr(self):
+        return self.alpha_init * np.exp(-self.k / self.epochs)
 
     def step(self, x):
         """
         Do one step of training on the given input vector.
         """
         # Stack x to have one row per weight
-        x_stack = np.stack([x]*(self.m*self.n), axis=0)
+        x_stack = np.stack([x] * (self.m * self.n), axis=0)
 
         # Get index of best matching unit
         bmu_index = self._find_bmu(x)
 
         # Find location of best matching unit
-        bmu_location = self._locations[bmu_index,:]
+        bmu_location = self._locations[bmu_index, :]
 
         # Find square distance from each weight to the BMU
-        stacked_bmu = np.stack([bmu_location]*(self.m*self.n), axis=0)
-        bmu_distance = np.sum(np.power(self._locations.astype(np.float64) - stacked_bmu.astype(np.float64), 2), axis=1)
+        stacked_bmu = np.stack([bmu_location] * (self.m * self.n), axis=0)
+        bmu_distance = np.sum(
+            np.power(
+                self._locations.astype(np.float64) - stacked_bmu.astype(np.float64), 2
+            ),
+            axis=1,
+        )
 
         # Compute update neighborhood
-        neighborhood = np.exp((bmu_distance / (self.sigma ** 2)) * -1)
+        # neighborhood = np.exp((bmu_distance / (self.sigma ** 2)) * -1)
+        # Andrew - new neighborhood function
+        neighborhood = np.exp(-(bmu_distance) / (2 * self._get_sigma() ** 2))
         local_step = self.lr * neighborhood
 
         # Stack local step to be proper shape for update
-        local_multiplier = np.stack([local_step]*(self.dim), axis=1)
+        local_multiplier = np.stack([local_step] * (self.dim), axis=1)
 
         # Multiply by difference between input and weights
         delta = local_multiplier * (x_stack - self.weights)
@@ -143,10 +189,30 @@ class SOM():
         n_samples = X.shape[0]
         total_iterations = np.minimum(epochs * n_samples, self.max_iter)
 
+        # Andrew - set epochs
+        self.epochs = epochs
+
         for epoch in range(epochs):
+            # Andrew - set k
+            self.k = epoch
+
+            if epoch % 10 == 0:
+                print("EPOCH", epoch, "/ ", epochs)
+
+            if epoch == 20:
+                self.map20 = self.get_map()
+
+            if epoch == 40:
+                self.map40 = self.get_map()
+
+            if epoch == 100:
+                self.map100 = self.get_map()
+
             # Break if past max number of iterations
+            """
             if global_iter_counter > self.max_iter:
                 break
+            """
 
             if shuffle:
                 rng = np.random.default_rng(self.random_state)
@@ -157,14 +223,24 @@ class SOM():
             # Train
             for idx in indices:
                 # Break if past max number of iterations
+
+                """
                 if global_iter_counter > self.max_iter:
                     break
+
+                """
                 input = X[idx]
                 # Do one step of training
                 self.step(input)
                 # Update learning rate
                 global_iter_counter += 1
-                self.lr = (1 - (global_iter_counter / total_iterations)) * self.initial_lr
+
+                """
+                self.lr = (
+                    1 - (global_iter_counter / total_iterations)
+                ) * self.initial_lr
+                """
+                self.lr = self._get_lr()
 
         # Compute inertia
         inertia = np.sum(np.array([float(self._compute_point_intertia(x)) for x in X]))
@@ -196,11 +272,15 @@ class SOM():
         """
         # Check to make sure SOM has been fit
         if not self._trained:
-            raise NotImplementedError('SOM object has no predict() method until after calling fit().')
+            raise NotImplementedError(
+                "SOM object has no predict() method until after calling fit()."
+            )
 
         # Make sure X has proper shape
-        assert len(X.shape) == 2, f'X should have two dimensions, not {len(X.shape)}'
-        assert X.shape[1] == self.dim, f'This SOM has dimesnion {self.dim}. Received input with dimension {X.shape[1]}'
+        assert len(X.shape) == 2, f"X should have two dimensions, not {len(X.shape)}"
+        assert (
+            X.shape[1] == self.dim
+        ), f"This SOM has dimesnion {self.dim}. Received input with dimension {X.shape[1]}"
 
         labels = np.array([self._find_bmu(x) for x in X])
         return labels
@@ -222,8 +302,8 @@ class SOM():
             from each item in X to each cluster center.
         """
         # Stack data and cluster centers
-        X_stack = np.stack([X]*(self.m*self.n), axis=1)
-        cluster_stack = np.stack([self.weights]*X.shape[0], axis=0)
+        X_stack = np.stack([X] * (self.m * self.n), axis=1)
+        cluster_stack = np.stack([self.weights] * X.shape[0], axis=0)
 
         # Compute difference
         diff = X_stack - cluster_stack
@@ -286,11 +366,13 @@ class SOM():
     @property
     def inertia_(self):
         if self._inertia_ is None:
-            raise AttributeError('SOM does not have inertia until after calling fit()')
+            raise AttributeError("SOM does not have inertia until after calling fit()")
         return self._inertia_
 
     @property
     def n_iter_(self):
         if self._n_iter_ is None:
-            raise AttributeError('SOM does not have n_iter_ attribute until after calling fit()')
+            raise AttributeError(
+                "SOM does not have n_iter_ attribute until after calling fit()"
+            )
         return self._n_iter_
